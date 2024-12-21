@@ -393,10 +393,6 @@ class DesktopSprite(QtWidgets.QWidget):
             new_y = sy + (ty - sy) * t
             QtGui.QCursor.setPos(int(new_x), int(new_y))
 
-################################################################
-# main()
-################################################################
-
 def main():
     app = QtWidgets.QApplication(sys.argv)
     desktop_sprite = DesktopSprite("image.png", "paw.png")
