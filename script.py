@@ -107,6 +107,7 @@ class DesktopSprite(QtWidgets.QWidget):
         self.vx = 0
         self.vy = 0
 
+
         # Movement parameters
         self.accel = 0.03
         self.friction = 0.75
