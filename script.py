@@ -99,7 +99,7 @@ class DesktopSprite(QtWidgets.QWidget):
                 QtCore.Qt.IgnoreAspectRatio,
                 QtCore.Qt.SmoothTransformation
             )
-            print(f"[INFO] Paw resized to 50x50.")
+            print("[INFO] Paw resized to 50x50.")
 
         # Sprite position and velocity
         self.sprite_x = 0
