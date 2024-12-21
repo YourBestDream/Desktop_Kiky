@@ -13,7 +13,6 @@ WH_MOUSE_LL = 14
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-
 class MouseHook:
     def __init__(self):
         self.hHook = None
@@ -89,12 +88,18 @@ class DesktopSprite(QtWidgets.QWidget):
         else:
             print(f"[INFO] Sprite loaded: {sprite_path} ({self.sprite.width()}x{self.sprite.height()})")
 
-        # Load paw sprite
+        # Load paw sprite and resize to 50x50 px
         self.paw_pixmap = QtGui.QPixmap(paw_path)
         if self.paw_pixmap.isNull():
             print(f"[ERROR] Paw image '{paw_path}' failed to load.")
         else:
             print(f"[INFO] Paw loaded: {paw_path} ({self.paw_pixmap.width()}x{self.paw_pixmap.height()})")
+            self.paw_pixmap = self.paw_pixmap.scaled(
+                50, 50,
+                QtCore.Qt.IgnoreAspectRatio,
+                QtCore.Qt.SmoothTransformation
+            )
+            print(f"[INFO] Paw resized to 50x50.")
 
         # Sprite position and velocity
         self.sprite_x = 0
@@ -110,15 +115,23 @@ class DesktopSprite(QtWidgets.QWidget):
         # Paw-trace logic
         self.paw_traces = []
         self.fade_time = 2000  # Paw fade (ms)
-        self.paw_interval = 500  # Place paw prints every 500 ms
-        self.last_paw_time = QtCore.QTime.currentTime().addMSecs(-self.paw_interval)
+
+        # Increase the base paw interval to add more delay
+        self.base_paw_interval = 500   # Base paw interval (ms)
+        self.min_paw_interval = 200    # Minimum possible interval (ms)
+        self.spawn_rate_factor = 4.0
+
+        self.last_paw_time = QtCore.QTime.currentTime().addMSecs(-self.base_paw_interval)
+
+        # Use a counter to alternate paw positions (requirement #1).
+        self.paw_step_index = 0
 
         # Timer ~60 FPS for normal sprite chase
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_sprite_position)
         self.timer.start(16)
 
-        # Random takeover logic (from second branch)
+        # Random takeover logic
         self.effect_active = False
         self.random_start_timer = QtCore.QTimer()
         self.random_start_timer.setSingleShot(True)
@@ -139,6 +152,10 @@ class DesktopSprite(QtWidgets.QWidget):
         # Schedule first takeover
         self.schedule_next_cursor_takeover()
 
+        # Store previous velocity (for acceleration check)
+        self.prev_vx = 0
+        self.prev_vy = 0
+
         # Initially shape the window so only sprite+trace areas are clickable
         self.updateWindowMask()
 
@@ -149,10 +166,8 @@ class DesktopSprite(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         now = QtCore.QTime.currentTime()
 
-        # Draw the main sprite first, partially transparent
+        # Draw the main sprite
         painter.save()
-        sprite_opacity = 0.5  # 50% transparency
-        painter.setOpacity(sprite_opacity)
         painter.drawPixmap(int(self.sprite_x),
                            int(self.sprite_y),
                            self.sprite)
@@ -196,34 +211,58 @@ class DesktopSprite(QtWidgets.QWidget):
         self.vx *= self.friction
         self.vy *= self.friction
 
-        # Clamp small velocities
-        if abs(self.vx) < 0.05:
-            self.vx = 0
-        if abs(self.vy) < 0.05:
-            self.vy = 0
-
-        # Update
-        self.sprite_x += self.vx - 1  # the "-1" from both branches
+        # Update position
+        self.sprite_x += self.vx - 1
         self.sprite_y += self.vy
 
         # Parallax
         self.sprite_x += self.vx * self.parallax_factor
         self.sprite_y += self.vy * self.parallax_factor
 
-        # Place paw traces at intervals (only if moving)
-        if abs(self.vx) > 0.1 or abs(self.vy) > 0.1:
+        # Compute speed (magnitude of velocity)
+        speed = math.hypot(self.vx, self.vy)
+
+        # Compute acceleration by comparing current and previous velocities
+        dvx = self.vx - self.prev_vx
+        dvy = self.vy - self.prev_vy
+        dt = 0.016  # Approx per-frame time at 60 FPS
+        acceleration = math.hypot(dvx, dvy) / dt
+
+        # Thresholds
+        speed_threshold = 0.1
+        accel_threshold = 0.5
+
+        # Only spawn paws if velocity OR acceleration exceeds thresholds
+        if speed > speed_threshold or acceleration > accel_threshold:
+            current_paw_interval = max(
+                self.min_paw_interval,
+                self.base_paw_interval / (1.0 + self.spawn_rate_factor * speed)
+            )
+
             now = QtCore.QTime.currentTime()
-            if self.last_paw_time.msecsTo(now) >= self.paw_interval:
+            if self.last_paw_time.msecsTo(now) >= current_paw_interval:
                 angle = math.degrees(math.atan2(self.vy, self.vx))
-                center_x = self.sprite_x + self.sprite.width() // 2
-                center_y = self.sprite_y + self.sprite.height() // 2
+
+                # Paw position on left border, slightly offset
+                paw_x = self.sprite_x + 5
+                paw_y = self.sprite_y + (self.sprite.height() // 2)
+
+                # Every 2nd paw with a slight y-offset
+                if self.paw_step_index % 2 == 1:
+                    paw_y += 10
+
                 self.paw_traces.append({
-                    'x': center_x,
-                    'y': center_y,
+                    'x': paw_x,
+                    'y': paw_y,
                     'angle': angle,
                     'birth_time': now
                 })
                 self.last_paw_time = now
+                self.paw_step_index += 1
+
+        # Store previous velocity for next frame
+        self.prev_vx = self.vx
+        self.prev_vy = self.vy
 
         # Update mask + repaint
         self.updateWindowMask()
@@ -260,7 +299,7 @@ class DesktopSprite(QtWidgets.QWidget):
         self.setMask(mask_region)
 
     ################################################################
-    # Random scheduling + takeover logic (from second branch)
+    # Random scheduling + takeover logic
     ################################################################
     def schedule_next_cursor_takeover(self):
         """
@@ -289,7 +328,7 @@ class DesktopSprite(QtWidgets.QWidget):
         self.effect_duration = random.randint(10, 15)
         self.effect_start_time = QtCore.QTime.currentTime()
 
-        # Move the cursor to the middle of the screen 
+        # Move the cursor to the middle of the screen
         screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
         center = screen.center()
         QtGui.QCursor.setPos(center)
@@ -398,7 +437,6 @@ def main():
     desktop_sprite = DesktopSprite("image.png", "paw.png")
     desktop_sprite.show()
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()
