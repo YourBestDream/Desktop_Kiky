@@ -39,7 +39,7 @@ class MouseHook:
                 if wParam == WM_MOUSEMOVE:
                     # Block all physical mouse moves
                     return 1  # Non-zero => swallow event
-                # Pass other events if desired (click, scroll) or block them similarly
+                # Pass other events if desired (click, scroll) or block similarly
             return user32.CallNextHookEx(self.hHook, nCode, wParam, lParam)
 
         self._hook_callback = self._callback_type(low_level_mouse_proc)
@@ -98,6 +98,16 @@ class DesktopSprite(QtWidgets.QWidget):
             )
             print("[INFO] Paw resized to 50x50.")
 
+        # ------------------------------------
+        # Load bubble sprite for the dialogue
+        # ------------------------------------
+        self.bubble_pixmap = QtGui.QPixmap("dialogue_window.png")
+        if self.bubble_pixmap.isNull():
+            print("[WARNING] 'dialogue_window.png' failed to load, using fallback painting.")
+        else:
+            print(f"[INFO] Dialogue bubble loaded: dialogue_window.png "
+                  f"({self.bubble_pixmap.width()}x{self.bubble_pixmap.height()})")
+
         # Sprite position and velocity
         self.sprite_x = 0
         self.sprite_y = 0
@@ -118,8 +128,6 @@ class DesktopSprite(QtWidgets.QWidget):
         self.min_paw_interval = 200
         self.spawn_rate_factor = 4.0
         self.last_paw_time = QtCore.QTime.currentTime().addMSecs(-self.base_paw_interval)
-
-        # Alternate left/right or extra offset usage
         self.paw_step_index = 0
 
         # Timers
@@ -149,17 +157,45 @@ class DesktopSprite(QtWidgets.QWidget):
         self.prev_vx = 0
         self.prev_vy = 0
 
-        # Shape the window to the combined region of sprite + paw traces
+        # ------------------------------------------------------------------
+        #  DIALOG / "SPEECH BUBBLE" LOGIC
+        # ------------------------------------------------------------------
+        self.dialog_messages = [
+            "Hope Santa will finally seat on a diet",
+            "If two vegans are having a fight is it still a beef?",
+            "Hungry? Eat the government!",
+            "Do not have money? Have you ever tried tax evasion?",
+            "I think that Капуе West is super overrated",
+            "Remember - Freedom"
+        ]
+
+        self.dialog_visible = False
+        self.dialog_text = ""
+        self.dialog_timer = QtCore.QTimer()
+        self.dialog_timer.setSingleShot(True)
+        self.dialog_timer.timeout.connect(self.show_dialog_random)
+
+        # Start first random dialog schedule
+        self.schedule_next_dialog()
+
+        self.hide_dialog_timer = QtCore.QTimer()
+        self.hide_dialog_timer.setSingleShot(True)
+        self.hide_dialog_timer.timeout.connect(self.hide_dialog)
+
+        # We'll store the bubble geometry here so we can add it to the mask.
+        self.dialog_rect = QtCore.QRect()
+
+        # Shape the window to the combined region of sprite + paw traces + bubble
         self.updateWindowMask()
 
     ################################################################
-    # Paint Event (draw paws first, then sprite on top)
+    # Paint Event (draw paws first, then sprite, then bubble + text)
     ################################################################
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         now = QtCore.QTime.currentTime()
 
-        # 1) Draw paw traces FIRST => behind the sprite
+        # 1) Draw paw traces behind the sprite
         for paw in list(self.paw_traces):
             elapsed = paw['birth_time'].msecsTo(now)
             if elapsed > self.fade_time:
@@ -176,12 +212,127 @@ class DesktopSprite(QtWidgets.QWidget):
                                self.paw_pixmap)
             painter.restore()
 
-        # 2) Draw the main sprite ON TOP
+        # 2) Draw the main sprite
         painter.save()
         painter.drawPixmap(int(self.sprite_x),
                            int(self.sprite_y),
                            self.sprite)
         painter.restore()
+
+        if self.dialog_visible and not self.sprite.isNull():
+            font = QtGui.QFont()
+            font.setPointSize(12)  # Set font size for bubble text
+            painter.setFont(font)
+            metrics = QtGui.QFontMetrics(font)
+
+            # Calculate bounding box for text
+            text_margin = 20  # Space around the text
+            max_width = 300  # Maximum width for word wrapping
+            text_bounding_rect = metrics.boundingRect(0, 0, max_width, 0,
+                                                    QtCore.Qt.TextWordWrap, self.dialog_text)
+
+            # Calculate required bubble dimensions
+            bubble_width = text_bounding_rect.width() + 2 * text_margin
+            bubble_height = text_bounding_rect.height() + 2 * text_margin + 5
+
+            # Resize the bubble sprite to fit the text dimensions
+            if not self.bubble_pixmap.isNull():
+                self.bubble_pixmap = self.bubble_pixmap.scaled(
+                    bubble_width, bubble_height,
+                    QtCore.Qt.KeepAspectRatioByExpanding,
+                    QtCore.Qt.SmoothTransformation
+                )
+
+            # Position the bubble to the left of the sprite
+            bubble_x = int(self.sprite_x) - bubble_width - 20
+            bubble_y = int(self.sprite_y)
+
+            # Ensure the bubble stays within screen bounds
+            screen_geo = QtWidgets.QApplication.primaryScreen().availableGeometry()
+            if bubble_x < 0:
+                bubble_x = 0
+            if bubble_y + bubble_height > screen_geo.height():
+                bubble_y = screen_geo.height() - bubble_height
+
+            # Update dialog rect for the mask
+            self.dialog_rect = QtCore.QRect(bubble_x, bubble_y, bubble_width, bubble_height)
+
+            # Draw the bubble sprite
+            painter.save()
+            painter.drawPixmap(bubble_x, bubble_y, self.bubble_pixmap)
+            painter.restore()
+
+            # Draw the text inside the bubble
+            text_rect = QtCore.QRect(
+                bubble_x + text_margin,
+                bubble_y + text_margin,
+                text_bounding_rect.width(),
+                text_bounding_rect.height()
+            )
+            painter.save()
+            painter.setPen(QtCore.Qt.black)
+            painter.drawText(text_rect, QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap, self.dialog_text)
+            painter.restore()
+        #     else:
+        #         # Fallback if bubble image is missing => draw a rectangle
+        #         rect_width = 200
+        #         rect_height = 50
+
+        #         # Position the rect to the left
+        #         bubble_x = int(self.sprite_x) - rect_width - 20
+        #         bubble_y = int(self.sprite_y)
+        #         if bubble_x < 0:
+        #             bubble_x = 0
+
+        #         self.dialog_rect = QtCore.QRect(bubble_x, bubble_y,
+        #                                         rect_width, rect_height)
+
+        #         painter.save()
+        #         painter.setBrush(QtGui.QColor(255, 255, 255, 220))
+        #         painter.setPen(QtCore.Qt.black)
+        #         painter.drawRect(self.dialog_rect)
+        #         painter.restore()
+
+        #         painter.save()
+        #         text_margin = 8
+        #         text_rect = QtCore.QRect(
+        #             bubble_x + text_margin,
+        #             bubble_y + text_margin,
+        #             rect_width - 2 * text_margin,
+        #             rect_height - 2 * text_margin
+        #         )
+        #         painter.setPen(QtCore.Qt.black)
+        #         painter.drawText(text_rect,
+        #                          QtCore.Qt.AlignLeft | QtCore.Qt.TextWordWrap,
+        #                          self.dialog_text)
+        #         painter.restore()
+        # else:
+        #     # No dialog => clear the stored rect
+        #     self.dialog_rect = QtCore.QRect()
+
+    ################################################################
+    # Dialog logic
+    ################################################################
+    def schedule_next_dialog(self):
+        """Schedule the next random appearance of the dialog in [5..7] seconds."""
+        wait_seconds = random.randint(5, 7)
+        self.dialog_timer.start(wait_seconds * 1000)
+        print(f"[INFO] Next dialog scheduled in {wait_seconds} seconds.")
+
+    def show_dialog_random(self):
+        """Show a random dialog message."""
+        self.dialog_text = random.choice(self.dialog_messages)
+        self.dialog_visible = True
+        self.update()  # Force paint => the rect is updated in paintEvent
+
+        # Hide the dialog after 5 seconds
+        self.hide_dialog_timer.start(5000)
+
+    def hide_dialog(self):
+        """Hide the dialog, then schedule another random appearance."""
+        self.dialog_visible = False
+        self.update()
+        self.schedule_next_dialog()
 
     ################################################################
     # Normal sprite following logic
@@ -231,9 +382,7 @@ class DesktopSprite(QtWidgets.QWidget):
             if self.last_paw_time.msecsTo(now) >= current_paw_interval:
                 angle = math.degrees(math.atan2(self.vy, self.vx))
 
-                # Center horizontally at the bottom of the sprite
-                # so that the paw's top edge = sprite bottom edge
-                # (given the rotation pivot is the center of the paw).
+                # Center horizontally at bottom of sprite
                 paw_x = self.sprite_x + (self.sprite.width() // 2)
                 paw_y = self.sprite_y + (self.sprite.height() // 2)
 
@@ -258,6 +407,7 @@ class DesktopSprite(QtWidgets.QWidget):
         self.update()
 
     def updateWindowMask(self):
+        """Ensure the window mask includes sprite, paws, AND bubble."""
         mask_region = QtGui.QRegion()
 
         # Sprite bounding rect
@@ -277,6 +427,10 @@ class DesktopSprite(QtWidgets.QWidget):
                 self.paw_pixmap.height()
             )
             mask_region = mask_region.united(QtGui.QRegion(paw_rect))
+
+        # Bubble bounding rect
+        if self.dialog_visible and not self.dialog_rect.isNull():
+            mask_region = mask_region.united(QtGui.QRegion(self.dialog_rect))
 
         self.setMask(mask_region)
 
@@ -391,6 +545,10 @@ class DesktopSprite(QtWidgets.QWidget):
             new_x = sx + (tx - sx) * t
             new_y = sy + (ty - sy) * t
             QtGui.QCursor.setPos(int(new_x), int(new_y))
+
+################################################################
+# Main
+################################################################
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
