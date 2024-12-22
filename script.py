@@ -39,7 +39,7 @@ class MouseHook:
                 if wParam == WM_MOUSEMOVE:
                     # Block all physical mouse moves
                     return 1  # Non-zero => swallow event
-                # Pass other events if desired (click, scroll) or block them similarly
+                # Pass other events if desired (click, scroll) or block similarly
             return user32.CallNextHookEx(self.hHook, nCode, wParam, lParam)
 
         self._hook_callback = self._callback_type(low_level_mouse_proc)
@@ -118,8 +118,6 @@ class DesktopSprite(QtWidgets.QWidget):
         self.min_paw_interval = 200
         self.spawn_rate_factor = 4.0
         self.last_paw_time = QtCore.QTime.currentTime().addMSecs(-self.base_paw_interval)
-
-        # Alternate left/right or extra offset usage
         self.paw_step_index = 0
 
         # Timers
@@ -149,17 +147,49 @@ class DesktopSprite(QtWidgets.QWidget):
         self.prev_vx = 0
         self.prev_vy = 0
 
+        # ------------------------------------------------------------------
+        #  DIALOG / "SPEECH BUBBLE" LOGIC
+        # ------------------------------------------------------------------
+        # 1) Define a list of possible messages
+        self.dialog_messages = [
+            "Hope Santa will finally seat on a diet",
+            "If two vegans are having a fight is it still a beef?",
+            "Hungry? Eat the government!",
+            "Do not have money? Have you ever tried tax evasion?",
+            "I think that Капуе West is super overrated",
+            "Remember - Freedom"
+        ]
+
+        # 2) Define flags and timers for dialog
+        self.dialog_visible = False
+        self.dialog_text = ""
+        self.dialog_timer = QtCore.QTimer()
+        self.dialog_timer.setSingleShot(True)
+        self.dialog_timer.timeout.connect(self.show_dialog_random)
+
+        # Start first random dialog schedule
+        self.schedule_next_dialog()
+
+        # 3) Timer to hide the dialog automatically
+        self.hide_dialog_timer = QtCore.QTimer()
+        self.hide_dialog_timer.setSingleShot(True)
+        self.hide_dialog_timer.timeout.connect(self.hide_dialog)
+
+        # We'll store the dialog geometry here so we can
+        # add it to the mask region.
+        self.dialog_rect = QtCore.QRect()
+
         # Shape the window to the combined region of sprite + paw traces
         self.updateWindowMask()
 
     ################################################################
-    # Paint Event (draw paws first, then sprite on top)
+    # Paint Event (draw paws first, then sprite, then dialog)
     ################################################################
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         now = QtCore.QTime.currentTime()
 
-        # 1) Draw paw traces FIRST => behind the sprite
+        # 1) Draw paw traces (behind the sprite)
         for paw in list(self.paw_traces):
             elapsed = paw['birth_time'].msecsTo(now)
             if elapsed > self.fade_time:
@@ -176,12 +206,75 @@ class DesktopSprite(QtWidgets.QWidget):
                                self.paw_pixmap)
             painter.restore()
 
-        # 2) Draw the main sprite ON TOP
+        # 2) Draw the main sprite
         painter.save()
         painter.drawPixmap(int(self.sprite_x),
                            int(self.sprite_y),
                            self.sprite)
         painter.restore()
+
+        # 3) Draw the dialog
+        if self.dialog_visible and not self.sprite.isNull():
+            rect_width = 200
+            rect_height = 50
+
+            # Position above the sprite
+            dialog_x = int(self.sprite_x)
+            dialog_y = int(self.sprite_y) - (rect_height + 10)
+
+            # Ensure we don't go off the top of the screen
+            if dialog_y < 0:
+                dialog_y = 0
+
+            # Update our saved dialog geometry
+            self.dialog_rect = QtCore.QRect(dialog_x, dialog_y, rect_width, rect_height)
+
+            # Draw a semi-transparent rectangle
+            painter.save()
+            painter.setBrush(QtGui.QColor(255, 255, 255, 220))
+            painter.setPen(QtCore.Qt.black)
+            painter.drawRect(self.dialog_rect)
+            painter.restore()
+
+            # Draw the text
+            painter.save()
+            text_margin = 8
+            text_rect = QtCore.QRect(
+                dialog_x + text_margin,
+                dialog_y + text_margin,
+                rect_width - 2 * text_margin,
+                rect_height - 2 * text_margin
+            )
+            painter.setPen(QtCore.Qt.black)
+            painter.drawText(text_rect, QtCore.Qt.AlignLeft | QtCore.Qt.TextWordWrap, self.dialog_text)
+            painter.restore()
+        else:
+            # No dialog => clear dialog_rect
+            self.dialog_rect = QtCore.QRect()
+
+    ################################################################
+    # Dialog logic
+    ################################################################
+    def schedule_next_dialog(self):
+        """Schedule the next random appearance of the dialog in [5..7] seconds."""
+        wait_seconds = random.randint(5, 7)
+        self.dialog_timer.start(wait_seconds * 1000)
+        print(f"[INFO] Next dialog scheduled in {wait_seconds} seconds.")
+
+    def show_dialog_random(self):
+        """Show a random dialog message."""
+        self.dialog_text = random.choice(self.dialog_messages)
+        self.dialog_visible = True
+        self.update()  # Force paint => the rect is updated in paintEvent
+
+        # Hide the dialog after 5 seconds
+        self.hide_dialog_timer.start(5000)
+
+    def hide_dialog(self):
+        """Hide the dialog, then schedule another random appearance."""
+        self.dialog_visible = False
+        self.update()
+        self.schedule_next_dialog()
 
     ################################################################
     # Normal sprite following logic
@@ -231,9 +324,7 @@ class DesktopSprite(QtWidgets.QWidget):
             if self.last_paw_time.msecsTo(now) >= current_paw_interval:
                 angle = math.degrees(math.atan2(self.vy, self.vx))
 
-                # Center horizontally at the bottom of the sprite
-                # so that the paw's top edge = sprite bottom edge
-                # (given the rotation pivot is the center of the paw).
+                # Center horizontally at bottom of sprite
                 paw_x = self.sprite_x + (self.sprite.width() // 2)
                 paw_y = self.sprite_y + (self.sprite.height() // 2)
 
@@ -258,6 +349,7 @@ class DesktopSprite(QtWidgets.QWidget):
         self.update()
 
     def updateWindowMask(self):
+        """Ensure the window mask includes sprite, paws, AND dialog."""
         mask_region = QtGui.QRegion()
 
         # Sprite bounding rect
@@ -277,6 +369,10 @@ class DesktopSprite(QtWidgets.QWidget):
                 self.paw_pixmap.height()
             )
             mask_region = mask_region.united(QtGui.QRegion(paw_rect))
+
+        # Dialog bounding rect
+        if self.dialog_visible and not self.dialog_rect.isNull():
+            mask_region = mask_region.united(QtGui.QRegion(self.dialog_rect))
 
         self.setMask(mask_region)
 
@@ -391,6 +487,10 @@ class DesktopSprite(QtWidgets.QWidget):
             new_x = sx + (tx - sx) * t
             new_y = sy + (ty - sy) * t
             QtGui.QCursor.setPos(int(new_x), int(new_y))
+
+################################################################
+# Main
+################################################################
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
