@@ -4,6 +4,7 @@ import random
 import ctypes
 from ctypes import wintypes
 from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtNetwork import QUdpSocket, QHostAddress
 
 ################################################################
 # Low-level mouse hook (Windows only)
@@ -130,16 +131,46 @@ class DesktopSprite(QtWidgets.QWidget):
         self.last_paw_time = QtCore.QTime.currentTime().addMSecs(-self.base_paw_interval)
         self.paw_step_index = 0
 
-        # Timers
+        # ==============================
+        # TIMERS (store original values)
+        # ==============================
+        self.original_update_interval_ms = 16
+        self.original_dialog_min = 5
+        self.original_dialog_max = 7
+        self.original_hide_dialog_ms = 5000
+        self.original_takeover_min = 30
+        self.original_takeover_max = 180
+        self.original_effect_duration_min = 10
+        self.original_effect_duration_max = 15
+        # For demonstration, we store the original base paw interval.
+        self.original_base_paw_interval = self.base_paw_interval
+        self.original_min_paw_interval  = self.min_paw_interval
+
+        # These are the only two timers we will scale in rampage mode:
+        # 1) Mouse overtake scheduling  (random_start_timer range)
+        # 2) Dialog scheduling         (dialog_timer range)
+        #
+        # We'll track separate "factors" to gradually lower them each time
+        # a new scheduling occurs (but never below 10%).
+        self.rampage_mode = False
+        self.dialog_factor = 1.0
+        self.takeover_factor = 1.0
+        self.min_factor = 0.1  # 10% minimum
+
+        # --- 1) Timer that drives continuous update of sprite position
+        #     (NOT scaled by rampage per your request)
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_sprite_position)
-        self.timer.start(16)
+        self.timer.start(self.original_update_interval_ms)
 
-        self.effect_active = False
+        # --- 2) Timer that schedules random takeover (mouse overtake timer)
+        #     We'll scale only the range used in schedule_next_cursor_takeover().
         self.random_start_timer = QtCore.QTimer()
         self.random_start_timer.setSingleShot(True)
         self.random_start_timer.timeout.connect(self.start_cursor_takeover)
 
+        # --- 3) Timer for moving the cursor around (during takeover)
+        #     (NOT scaled by rampage per your request)
         self.cursor_move_timer = QtCore.QTimer()
         self.cursor_move_timer.timeout.connect(self.move_cursor_around)
         self.cursor_move_start_time = None
@@ -150,7 +181,7 @@ class DesktopSprite(QtWidgets.QWidget):
         # Mouse hook manager
         self.mouse_hook = MouseHook()
 
-        # Schedule the first random takeover
+        # 4) Start the cycle for next takeover
         self.schedule_next_cursor_takeover()
 
         # Track previous velocity
@@ -165,7 +196,7 @@ class DesktopSprite(QtWidgets.QWidget):
             "If two vegans are having a fight is it still considered a beef?",
             "Hungry? Eat the government!",
             "Do not have money? Have you ever tried tax evasion?",
-            "I think that Каnуе West is super overrated",
+            "I think that Кanye West is super overrated",
         ]
 
         self.dialog_visible = False
@@ -187,6 +218,60 @@ class DesktopSprite(QtWidgets.QWidget):
         # Shape the window to the combined region of sprite + paw traces + bubble
         self.updateWindowMask()
 
+        # ================
+        # RAMPAGE HANDLING
+        # ================
+        # We trigger rampage after 1 minute. That part is unchanged.
+        self.rampage_trigger_timer = QtCore.QTimer()
+        self.rampage_trigger_timer.setSingleShot(True)
+        self.rampage_trigger_timer.timeout.connect(self.rampage_on)
+        self.rampage_trigger_timer.start(60_000)  # 60s
+
+        # ===============
+        # UDP BROADCAST
+        # ===============
+        self.udp_socket = QUdpSocket(self)
+        self.udp_socket.bind(QHostAddress.Any, 12345)
+        self.udp_socket.readyRead.connect(self.handle_broadcast)
+
+    ################################################################
+    # RAMPAGE / SPEED-UPS (Only for mouse overtake + dialog timers)
+    ################################################################
+    def rampage_on(self):
+        """Enter rampage mode. 
+           Only affects:
+           1) scheduling mouse takeover
+           2) scheduling next dialog 
+        """
+        if self.rampage_mode:
+            return
+        self.rampage_mode = True
+        print("[RAMPAGE] Rampage mode activated.")
+
+        # We do NOT touch the main update timer or paw intervals.
+        # We only make future calls to schedule_next_cursor_takeover() 
+        # and schedule_next_dialog() use reduced intervals.
+
+    def rampage_off(self):
+        """Exit rampage mode (restore normal scheduling for takeover/dialog)."""
+        if not self.rampage_mode:
+            return
+        self.rampage_mode = False
+        print("[RAMPAGE] Rampage mode ended.")
+
+        # Reset factors to 1.0 for subsequent schedules:
+        self.dialog_factor = 1.0
+        self.takeover_factor = 1.0
+
+    def handle_broadcast(self):
+        """Read incoming broadcast datagrams and parse them."""
+        while self.udp_socket.hasPendingDatagrams():
+            data, host, port = self.udp_socket.readDatagram(self.udp_socket.pendingDatagramSize())
+            message = data.decode("utf-8").strip()
+            if message == "Gifts Collected!":
+                print("[UDP] Received 'Gifts Collected!' => stopping rampage.")
+                self.rampage_off()
+
     ################################################################
     # Paint Event (draw paws first, then sprite, then bubble + text)
     ################################################################
@@ -207,15 +292,15 @@ class DesktopSprite(QtWidgets.QWidget):
             painter.translate(paw['x'], paw['y'])
             painter.rotate(paw['angle'])
             painter.drawPixmap(-self.paw_pixmap.width() // 2,
-                            -self.paw_pixmap.height() // 2,
-                            self.paw_pixmap)
+                               -self.paw_pixmap.height() // 2,
+                               self.paw_pixmap)
             painter.restore()
 
         # 2) Draw the main sprite
         painter.save()
         painter.drawPixmap(int(self.sprite_x),
-                        int(self.sprite_y),
-                        self.sprite)
+                           int(self.sprite_y),
+                           self.sprite)
         painter.restore()
 
         # 3) Draw the bubble + text if visible
@@ -228,8 +313,11 @@ class DesktopSprite(QtWidgets.QWidget):
             # Calculate bounding box for text
             text_margin = 20  # Space around the text
             max_width = 350  # Maximum width for word wrapping
-            text_bounding_rect = metrics.boundingRect(0, 0, max_width, 0,
-                                                    QtCore.Qt.TextWordWrap, self.dialog_text)
+            text_bounding_rect = metrics.boundingRect(
+                0, 0, max_width, 0,
+                QtCore.Qt.TextWordWrap,
+                self.dialog_text
+            )
 
             # Calculate required bubble dimensions with extra height for tail
             bubble_width = text_bounding_rect.width() + 2 * text_margin
@@ -282,13 +370,36 @@ class DesktopSprite(QtWidgets.QWidget):
             self.dialog_rect = QtCore.QRect()
 
     ################################################################
-    # Dialog logic
+    # Dialog logic (SCALED by self.dialog_factor if in rampage)
     ################################################################
     def schedule_next_dialog(self):
-        """Schedule the next random appearance of the dialog in [5..7] seconds."""
-        wait_seconds = random.randint(5, 7)
-        self.dialog_timer.start(wait_seconds * 1000)
-        print(f"[INFO] Next dialog scheduled in {wait_seconds} seconds.")
+        """
+        Schedule the next random appearance of the dialog in [5..7] seconds,
+        factoring in rampage mode by adjusting with self.dialog_factor.
+
+        On each new scheduling (call), if rampage_mode is True,
+        we reduce self.dialog_factor by e.g. 10% to gradually
+        decrease the wait time, but never below 0.1.
+        """
+        base_min = self.original_dialog_min
+        base_max = self.original_dialog_max
+
+        if self.rampage_mode:
+            # Decrease factor by 10% each scheduling, but not below 0.1
+            self.dialog_factor = max(self.min_factor, self.dialog_factor * 0.9)
+
+        # Apply factor to the random range
+        # e.g. if base_min=5, base_max=7, factor=0.8 => new range [4..5.6]
+        scaled_min = base_min * self.dialog_factor
+        scaled_max = base_max * self.dialog_factor
+
+        # Random integer in [scaled_min, scaled_max]
+        # but clamp to at least 1 second to avoid too-fast flickers
+        wait_seconds = random.uniform(scaled_min, scaled_max)
+        wait_seconds = max(wait_seconds, 1.0)  # force at least 1 second
+
+        self.dialog_timer.start(int(wait_seconds * 1000))
+        print(f"[INFO] Next dialog scheduled in ~{wait_seconds:.2f} seconds.")
 
     def show_dialog_random(self):
         """Show a random dialog message."""
@@ -296,8 +407,8 @@ class DesktopSprite(QtWidgets.QWidget):
         self.dialog_visible = True
         self.update()  # Force paint => the rect is updated in paintEvent
 
-        # Hide the dialog after 5 seconds
-        self.hide_dialog_timer.start(5000)
+        # Hide the dialog after e.g. 5 seconds (unchanged — or you could scale it too if you want)
+        self.hide_dialog_timer.start(self.original_hide_dialog_ms)
 
     def hide_dialog(self):
         """Hide the dialog, then schedule another random appearance."""
@@ -406,15 +517,29 @@ class DesktopSprite(QtWidgets.QWidget):
         self.setMask(mask_region)
 
     ################################################################
-    # Random scheduling + takeover logic
+    # Random scheduling + takeover logic (SCALED by self.takeover_factor)
     ################################################################
     def schedule_next_cursor_takeover(self):
-        wait_seconds = random.randint(30, 180)
-        self.random_start_timer.start(wait_seconds * 1000)
-        print(f"[INFO] Next takeover in {wait_seconds} seconds.")
+        """
+        Schedule the next cursor takeover in [30..180] seconds.
+        If rampage_mode is True, we reduce self.takeover_factor by 10% each time
+        (never below 0.1) and apply that factor to the random range.
+        """
+        if self.rampage_mode:
+            self.takeover_factor = max(self.min_factor, self.takeover_factor * 0.9)
+
+        # Apply the factor to [30..180]
+        range_min = self.original_takeover_min * self.takeover_factor
+        range_max = self.original_takeover_max * self.takeover_factor
+
+        wait_seconds = random.uniform(range_min, range_max)
+        wait_seconds = max(wait_seconds, 1.0)  # at least 1 second
+
+        self.random_start_timer.start(int(wait_seconds * 1000))
+        print(f"[INFO] Next takeover in ~{wait_seconds:.2f} seconds.")
 
     def start_cursor_takeover(self):
-        if self.effect_active:
+        if hasattr(self, "effect_active") and self.effect_active:
             return
 
         self.effect_active = True
@@ -423,8 +548,10 @@ class DesktopSprite(QtWidgets.QWidget):
         # Hide the system-wide cursor
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.BlankCursor)
 
-        # Duration
-        self.effect_duration = random.randint(10, 15)
+        # Duration: in [10..15] seconds (unchanged, or you could also scale it if desired)
+        duration_min = self.original_effect_duration_min
+        duration_max = self.original_effect_duration_max
+        self.effect_duration = random.randint(duration_min, duration_max)
         self.effect_start_time = QtCore.QTime.currentTime()
 
         # Move cursor to center
@@ -447,7 +574,7 @@ class DesktopSprite(QtWidgets.QWidget):
 
     def stop_cursor_takeover(self):
         try:
-            if not self.effect_active:
+            if not getattr(self, "effect_active", False):
                 return
 
             self.effect_active = False
@@ -497,6 +624,7 @@ class DesktopSprite(QtWidgets.QWidget):
             self.from_pos = QtGui.QCursor.pos()
             self.to_pos = self.pick_random_target()
             self.cursor_move_duration = random.uniform(0.5, 2.0)
+
             print(
                 f"[INFO] Moving cursor from {self.from_pos} to {self.to_pos} "
                 f"over {self.cursor_move_duration:.2f} sec."
