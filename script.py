@@ -4,7 +4,7 @@ import random
 import ctypes
 from ctypes import wintypes
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtNetwork import QUdpSocket, QHostAddress
+from PyQt5.QtNetwork import QUdpSocket, QHostAddress, QAbstractSocket
 
 ################################################################
 # Low-level mouse hook (Windows only)
@@ -217,7 +217,7 @@ class DesktopSprite(QtWidgets.QWidget):
         self.rampage_trigger_timer = QtCore.QTimer()
         self.rampage_trigger_timer.setSingleShot(True)
         self.rampage_trigger_timer.timeout.connect(self.rampage_on)
-        self.rampage_trigger_timer.start(10_000)  # 60s
+        self.rampage_trigger_timer.start(30_000)  # 60s
 
         # UDP
         self.udp_socket = QUdpSocket(self)
@@ -248,7 +248,14 @@ class DesktopSprite(QtWidgets.QWidget):
         self.rampage_mode = True
         print("[RAMPAGE] Rampage mode activated.")
 
-        # Now that rampage is on, let's schedule a takeover & dialogs again
+        # ---- RE-OPEN THE SOCKET HERE, IF CLOSED ----
+        if self.udp_socket.state() == QAbstractSocket.UnconnectedState:
+            # Re-bind to the same port and reconnect the signal
+            self.udp_socket.bind(QHostAddress.Any, 12345)
+            self.udp_socket.readyRead.connect(self.handle_broadcast)
+            print("[UDP] Re-opened UDP socket for rampage messages.")
+
+        # Now that rampage is on, schedule takeover & dialogs
         self.schedule_next_cursor_takeover()
         self.schedule_next_dialog()
 
@@ -301,6 +308,12 @@ class DesktopSprite(QtWidgets.QWidget):
             message = data.decode("utf-8").strip()
             if message == "Gifts Collected!":
                 print("[UDP] Received 'Gifts Collected!' => stopping rampage.")
+
+                # ---- CLOSE THE SOCKET HERE ----
+                self.udp_socket.readyRead.disconnect(self.handle_broadcast)
+                self.udp_socket.close()
+                print("[UDP] UDP socket closed after receiving 'Gifts Collected!'")
+
                 self.rampage_off()
 
     ################################################################
