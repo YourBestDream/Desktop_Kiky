@@ -42,10 +42,7 @@ class MouseHook:
                 # Pass other events if desired (click, scroll) or block them similarly
             return user32.CallNextHookEx(self.hHook, nCode, wParam, lParam)
 
-        # Store the callback so it isn't garbage-collected
         self._hook_callback = self._callback_type(low_level_mouse_proc)
-
-        # Set the hook
         self.hHook = user32.SetWindowsHookExW(
             WH_MOUSE_LL,
             self._hook_callback,
@@ -107,7 +104,6 @@ class DesktopSprite(QtWidgets.QWidget):
         self.vx = 0
         self.vy = 0
 
-
         # Movement parameters
         self.accel = 0.03
         self.friction = 0.75
@@ -117,31 +113,27 @@ class DesktopSprite(QtWidgets.QWidget):
         self.paw_traces = []
         self.fade_time = 2000  # Paw fade (ms)
 
-        # Increase the base paw interval to add more delay
-        self.base_paw_interval = 500   # Base paw interval (ms)
-        self.min_paw_interval = 200    # Minimum possible interval (ms)
+        # Interval logic for generating paws
+        self.base_paw_interval = 500
+        self.min_paw_interval = 200
         self.spawn_rate_factor = 4.0
-
         self.last_paw_time = QtCore.QTime.currentTime().addMSecs(-self.base_paw_interval)
 
-        # Use a counter to alternate paw positions (requirement #1).
+        # Alternate left/right or extra offset usage
         self.paw_step_index = 0
 
-        # Timer ~60 FPS for normal sprite chase
+        # Timers
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_sprite_position)
         self.timer.start(16)
 
-        # Random takeover logic
         self.effect_active = False
         self.random_start_timer = QtCore.QTimer()
         self.random_start_timer.setSingleShot(True)
         self.random_start_timer.timeout.connect(self.start_cursor_takeover)
 
-        # Timer that runs while the cursor is being “taken over”
         self.cursor_move_timer = QtCore.QTimer()
         self.cursor_move_timer.timeout.connect(self.move_cursor_around)
-
         self.cursor_move_start_time = None
         self.cursor_move_duration = 0
         self.from_pos = None
@@ -150,31 +142,24 @@ class DesktopSprite(QtWidgets.QWidget):
         # Mouse hook manager
         self.mouse_hook = MouseHook()
 
-        # Schedule first takeover
+        # Schedule the first random takeover
         self.schedule_next_cursor_takeover()
 
-        # Store previous velocity (for acceleration check)
+        # Track previous velocity
         self.prev_vx = 0
         self.prev_vy = 0
 
-        # Initially shape the window so only sprite+trace areas are clickable
+        # Shape the window to the combined region of sprite + paw traces
         self.updateWindowMask()
 
     ################################################################
-    # Paint Event
+    # Paint Event (draw paws first, then sprite on top)
     ################################################################
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         now = QtCore.QTime.currentTime()
 
-        # Draw the main sprite
-        painter.save()
-        painter.drawPixmap(int(self.sprite_x),
-                           int(self.sprite_y),
-                           self.sprite)
-        painter.restore()
-
-        # Draw paw traces on top
+        # 1) Draw paw traces FIRST => behind the sprite
         for paw in list(self.paw_traces):
             elapsed = paw['birth_time'].msecsTo(now)
             if elapsed > self.fade_time:
@@ -191,24 +176,29 @@ class DesktopSprite(QtWidgets.QWidget):
                                self.paw_pixmap)
             painter.restore()
 
+        # 2) Draw the main sprite ON TOP
+        painter.save()
+        painter.drawPixmap(int(self.sprite_x),
+                           int(self.sprite_y),
+                           self.sprite)
+        painter.restore()
+
     ################################################################
     # Normal sprite following logic
     ################################################################
     def update_sprite_position(self):
-        # Cursor position (global)
         cursor_pos = QtGui.QCursor.pos()
 
-        # Target is to the left of cursor
+        # Aim left of the cursor
         target_x = cursor_pos.x() - self.sprite.width()
         target_y = cursor_pos.y() - self.sprite.height() // 2
 
-        # Accelerate
         dx = target_x - self.sprite_x
         dy = target_y - self.sprite_y
         self.vx += dx * self.accel
         self.vy += dy * self.accel
 
-        # Friction
+        # Apply friction
         self.vx *= self.friction
         self.vy *= self.friction
 
@@ -216,39 +206,38 @@ class DesktopSprite(QtWidgets.QWidget):
         self.sprite_x += self.vx - 1
         self.sprite_y += self.vy
 
-        # Parallax
+        # Optional parallax
         self.sprite_x += self.vx * self.parallax_factor
         self.sprite_y += self.vy * self.parallax_factor
 
-        # Compute speed (magnitude of velocity)
+        # Calculate speed & acceleration
         speed = math.hypot(self.vx, self.vy)
-
-        # Compute acceleration by comparing current and previous velocities
         dvx = self.vx - self.prev_vx
         dvy = self.vy - self.prev_vy
-        dt = 0.016  # Approx per-frame time at 60 FPS
+        dt = 0.016
         acceleration = math.hypot(dvx, dvy) / dt
 
-        # Thresholds
+        # Thresholds for spawning paws
         speed_threshold = 0.1
         accel_threshold = 0.5
 
-        # Only spawn paws if velocity OR acceleration exceeds thresholds
+        # Spawn paws if velocity OR acceleration is above threshold
         if speed > speed_threshold or acceleration > accel_threshold:
             current_paw_interval = max(
                 self.min_paw_interval,
                 self.base_paw_interval / (1.0 + self.spawn_rate_factor * speed)
             )
-
             now = QtCore.QTime.currentTime()
             if self.last_paw_time.msecsTo(now) >= current_paw_interval:
                 angle = math.degrees(math.atan2(self.vy, self.vx))
 
-                # Paw position on left border, slightly offset
-                paw_x = self.sprite_x + 5
+                # Center horizontally at the bottom of the sprite
+                # so that the paw's top edge = sprite bottom edge
+                # (given the rotation pivot is the center of the paw).
+                paw_x = self.sprite_x + (self.sprite.width() // 2)
                 paw_y = self.sprite_y + (self.sprite.height() // 2)
 
-                # Every 2nd paw with a slight y-offset
+                # Slight offset every other paw
                 if self.paw_step_index % 2 == 1:
                     paw_y += 10
 
@@ -261,19 +250,14 @@ class DesktopSprite(QtWidgets.QWidget):
                 self.last_paw_time = now
                 self.paw_step_index += 1
 
-        # Store previous velocity for next frame
+        # Save previous velocity
         self.prev_vx = self.vx
         self.prev_vy = self.vy
 
-        # Update mask + repaint
         self.updateWindowMask()
         self.update()
 
     def updateWindowMask(self):
-        """
-        Restrict the window's clickable region to bounding rectangles of
-        the sprite and paw traces.
-        """
         mask_region = QtGui.QRegion()
 
         # Sprite bounding rect
@@ -282,8 +266,7 @@ class DesktopSprite(QtWidgets.QWidget):
                                        int(self.sprite_y),
                                        self.sprite.width(),
                                        self.sprite.height())
-            sprite_region = QtGui.QRegion(sprite_rect)
-            mask_region = mask_region.united(sprite_region)
+            mask_region = mask_region.united(QtGui.QRegion(sprite_rect))
 
         # Paw bounding rects
         for paw in self.paw_traces:
@@ -293,29 +276,19 @@ class DesktopSprite(QtWidgets.QWidget):
                 self.paw_pixmap.width(),
                 self.paw_pixmap.height()
             )
-            paw_region = QtGui.QRegion(paw_rect)
-            mask_region = mask_region.united(paw_region)
+            mask_region = mask_region.united(QtGui.QRegion(paw_rect))
 
-        # Enforce the mask
         self.setMask(mask_region)
 
     ################################################################
     # Random scheduling + takeover logic
     ################################################################
     def schedule_next_cursor_takeover(self):
-        """
-        Wait a random time between 30 and 180 seconds before starting
-        the effect again.
-        """
         wait_seconds = random.randint(30, 180)
         self.random_start_timer.start(wait_seconds * 1000)
         print(f"[INFO] Next takeover in {wait_seconds} seconds.")
 
     def start_cursor_takeover(self):
-        """
-        Hides the cursor, blocks user mouse input (via low-level hook),
-        and starts aggressively moving it for a random time (10–15 seconds).
-        """
         if self.effect_active:
             return
 
@@ -325,11 +298,11 @@ class DesktopSprite(QtWidgets.QWidget):
         # Hide the system-wide cursor
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.BlankCursor)
 
-        # Decide effect duration (10–15 seconds)
+        # Duration
         self.effect_duration = random.randint(10, 15)
         self.effect_start_time = QtCore.QTime.currentTime()
 
-        # Move the cursor to the middle of the screen
+        # Move cursor to center
         screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
         center = screen.center()
         QtGui.QCursor.setPos(center)
@@ -338,20 +311,16 @@ class DesktopSprite(QtWidgets.QWidget):
         # Block user mouse input
         self.mouse_hook.start()
 
-        # Reset param-based movement
+        # Reset
         self.cursor_move_start_time = None
         self.cursor_move_duration = 0
         self.from_pos = None
         self.to_pos = None
 
-        # Start the takeover movement at ~60 FPS
+        # Start the takeover movement
         self.cursor_move_timer.start(16)
 
     def stop_cursor_takeover(self):
-        """
-        Ends the cursor takeover, restores normal cursor, unhooks mouse,
-        and schedules next random takeover.
-        """
         try:
             if not self.effect_active:
                 return
@@ -365,10 +334,10 @@ class DesktopSprite(QtWidgets.QWidget):
             # Unblock user mouse
             self.mouse_hook.stop()
 
-            # Stop our movement timer
+            # Stop movement
             self.cursor_move_timer.stop()
 
-            # Schedule the next random takeover
+            # Schedule next
             self.schedule_next_cursor_takeover()
 
         except Exception as e:
@@ -377,9 +346,6 @@ class DesktopSprite(QtWidgets.QWidget):
             QtWidgets.QApplication.restoreOverrideCursor()
 
     def pick_random_target(self):
-        """
-        Random target in the screen area, or corners.
-        """
         screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
         corners = [
             screen.topLeft(),
@@ -387,7 +353,6 @@ class DesktopSprite(QtWidgets.QWidget):
             screen.bottomLeft(),
             screen.bottomRight()
         ]
-        # 50% corners, 50% random
         if random.random() < 0.5:
             return random.choice(corners)
         else:
@@ -396,10 +361,6 @@ class DesktopSprite(QtWidgets.QWidget):
             return QtCore.QPoint(x, y)
 
     def move_cursor_around(self):
-        """
-        Aggressively move invisible cursor around to random targets for
-        the duration of the takeover.
-        """
         now = QtCore.QTime.currentTime()
         elapsed_ms_total = self.effect_start_time.msecsTo(now)
         if elapsed_ms_total >= self.effect_duration * 1000:
@@ -407,7 +368,6 @@ class DesktopSprite(QtWidgets.QWidget):
             return
 
         if self.cursor_move_start_time is None:
-            # Pick new random target
             self.cursor_move_start_time = QtCore.QTime.currentTime()
             self.from_pos = QtGui.QCursor.pos()
             self.to_pos = self.pick_random_target()
@@ -426,7 +386,6 @@ class DesktopSprite(QtWidgets.QWidget):
             print(f"[INFO] Cursor reached {self.to_pos}.")
             self.cursor_move_start_time = None
         else:
-            # Linear interpolation
             sx, sy = self.from_pos.x(), self.from_pos.y()
             tx, ty = self.to_pos.x(), self.to_pos.y()
             new_x = sx + (tx - sx) * t
