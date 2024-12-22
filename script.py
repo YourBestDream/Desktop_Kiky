@@ -101,11 +101,11 @@ class DesktopSprite(QtWidgets.QWidget):
         # ------------------------------------
         # Load bubble sprite for the dialogue
         # ------------------------------------
-        self.bubble_pixmap = QtGui.QPixmap("dialogue_window.png")
+        self.bubble_pixmap = QtGui.QPixmap("dialogue_window.svg")
         if self.bubble_pixmap.isNull():
-            print("[WARNING] 'dialogue_window.png' failed to load, using fallback painting.")
+            print("[WARNING] 'dialogue_window.svg' failed to load, using fallback painting.")
         else:
-            print(f"[INFO] Dialogue bubble loaded: dialogue_window.png "
+            print(f"[INFO] Dialogue bubble loaded: dialogue_window.svg "
                   f"({self.bubble_pixmap.width()}x{self.bubble_pixmap.height()})")
 
         # Sprite position and velocity
@@ -162,11 +162,10 @@ class DesktopSprite(QtWidgets.QWidget):
         # ------------------------------------------------------------------
         self.dialog_messages = [
             "Hope Santa will finally seat on a diet",
-            "If two vegans are having a fight is it still a beef?",
+            "If two vegans are having a fight is it still considered a beef?",
             "Hungry? Eat the government!",
             "Do not have money? Have you ever tried tax evasion?",
-            "I think that Капуе West is super overrated",
-            "Remember - Freedom"
+            "I think that Каnуе West is super overrated",
         ]
 
         self.dialog_visible = False
@@ -208,17 +207,18 @@ class DesktopSprite(QtWidgets.QWidget):
             painter.translate(paw['x'], paw['y'])
             painter.rotate(paw['angle'])
             painter.drawPixmap(-self.paw_pixmap.width() // 2,
-                               -self.paw_pixmap.height() // 2,
-                               self.paw_pixmap)
+                            -self.paw_pixmap.height() // 2,
+                            self.paw_pixmap)
             painter.restore()
 
         # 2) Draw the main sprite
         painter.save()
         painter.drawPixmap(int(self.sprite_x),
-                           int(self.sprite_y),
-                           self.sprite)
+                        int(self.sprite_y),
+                        self.sprite)
         painter.restore()
 
+        # 3) Draw the bubble + text if visible
         if self.dialog_visible and not self.sprite.isNull():
             font = QtGui.QFont()
             font.setPointSize(12)  # Set font size for bubble text
@@ -227,15 +227,19 @@ class DesktopSprite(QtWidgets.QWidget):
 
             # Calculate bounding box for text
             text_margin = 20  # Space around the text
-            max_width = 300  # Maximum width for word wrapping
+            max_width = 350  # Maximum width for word wrapping
             text_bounding_rect = metrics.boundingRect(0, 0, max_width, 0,
                                                     QtCore.Qt.TextWordWrap, self.dialog_text)
 
-            # Calculate required bubble dimensions
+            # Calculate required bubble dimensions with extra height for tail
             bubble_width = text_bounding_rect.width() + 2 * text_margin
-            bubble_height = text_bounding_rect.height() + 2 * text_margin + 5
+            bubble_height = text_bounding_rect.height() + 2 * text_margin
 
-            # Resize the bubble sprite to fit the text dimensions
+            # Add extra height for the tail
+            tail_margin = max(20, int(0.5 * bubble_height))  # Adjust tail size proportionally
+            bubble_height += tail_margin
+
+            # Resize the bubble sprite to fit the text dimensions with tail
             if not self.bubble_pixmap.isNull():
                 self.bubble_pixmap = self.bubble_pixmap.scaled(
                     bubble_width, bubble_height,
@@ -244,7 +248,7 @@ class DesktopSprite(QtWidgets.QWidget):
                 )
 
             # Position the bubble to the left of the sprite
-            bubble_x = int(self.sprite_x) - bubble_width - 20
+            bubble_x = int(self.sprite_x) - bubble_width - 30
             bubble_y = int(self.sprite_y)
 
             # Ensure the bubble stays within screen bounds
@@ -273,42 +277,9 @@ class DesktopSprite(QtWidgets.QWidget):
             painter.setPen(QtCore.Qt.black)
             painter.drawText(text_rect, QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap, self.dialog_text)
             painter.restore()
-        #     else:
-        #         # Fallback if bubble image is missing => draw a rectangle
-        #         rect_width = 200
-        #         rect_height = 50
-
-        #         # Position the rect to the left
-        #         bubble_x = int(self.sprite_x) - rect_width - 20
-        #         bubble_y = int(self.sprite_y)
-        #         if bubble_x < 0:
-        #             bubble_x = 0
-
-        #         self.dialog_rect = QtCore.QRect(bubble_x, bubble_y,
-        #                                         rect_width, rect_height)
-
-        #         painter.save()
-        #         painter.setBrush(QtGui.QColor(255, 255, 255, 220))
-        #         painter.setPen(QtCore.Qt.black)
-        #         painter.drawRect(self.dialog_rect)
-        #         painter.restore()
-
-        #         painter.save()
-        #         text_margin = 8
-        #         text_rect = QtCore.QRect(
-        #             bubble_x + text_margin,
-        #             bubble_y + text_margin,
-        #             rect_width - 2 * text_margin,
-        #             rect_height - 2 * text_margin
-        #         )
-        #         painter.setPen(QtCore.Qt.black)
-        #         painter.drawText(text_rect,
-        #                          QtCore.Qt.AlignLeft | QtCore.Qt.TextWordWrap,
-        #                          self.dialog_text)
-        #         painter.restore()
-        # else:
-        #     # No dialog => clear the stored rect
-        #     self.dialog_rect = QtCore.QRect()
+        else:
+            # No dialog => clear the stored rect
+            self.dialog_rect = QtCore.QRect()
 
     ################################################################
     # Dialog logic
