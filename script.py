@@ -219,83 +219,96 @@ class DesktopSprite(QtWidgets.QWidget):
                            self.sprite)
         painter.restore()
 
-        # 3) Draw the bubble + text if visible
         if self.dialog_visible and not self.sprite.isNull():
+            font = QtGui.QFont()
+            font.setPointSize(12)  # Set font size for bubble text
+            painter.setFont(font)
+            metrics = QtGui.QFontMetrics(font)
+
+            # Calculate bounding box for text
+            text_margin = 20  # Space around the text
+            max_width = 300  # Maximum width for word wrapping
+            text_bounding_rect = metrics.boundingRect(0, 0, max_width, 0,
+                                                    QtCore.Qt.TextWordWrap, self.dialog_text)
+
+            # Calculate required bubble dimensions
+            bubble_width = text_bounding_rect.width() + 2 * text_margin
+            bubble_height = text_bounding_rect.height() + 2 * text_margin + 5
+
+            # Resize the bubble sprite to fit the text dimensions
             if not self.bubble_pixmap.isNull():
-                # ----------------------------------------
-                # Draw the bubble image to the left side
-                # ----------------------------------------
-                bubble_x = int(self.sprite_x) - self.bubble_pixmap.width() - 20
-                bubble_y = int(self.sprite_y)
-
-                # In case the sprite is near the left edge, clamp
-                if bubble_x < 0:
-                    bubble_x = 0
-
-                # Update geometry so we can add to mask
-                self.dialog_rect = QtCore.QRect(bubble_x,
-                                                bubble_y,
-                                                self.bubble_pixmap.width(),
-                                                self.bubble_pixmap.height())
-
-                painter.save()
-                painter.drawPixmap(bubble_x, bubble_y, self.bubble_pixmap)
-                painter.restore()
-
-                # Now draw text on top of the bubble
-                # This offset depends on how you want the text placed inside
-                text_offset_x = 20
-                text_offset_y = 10
-                # Limit text area to bubble size minus margins
-                text_width = self.bubble_pixmap.width() - text_offset_x - 10
-                text_height = self.bubble_pixmap.height() - text_offset_y - 10
-
-                text_rect = QtCore.QRect(bubble_x + text_offset_x,
-                                         bubble_y + text_offset_y,
-                                         text_width,
-                                         text_height)
-                painter.save()
-                painter.setPen(QtCore.Qt.black)
-                painter.drawText(text_rect,
-                                 QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter | QtCore.Qt.TextWordWrap,
-                                 self.dialog_text)
-                painter.restore()
-            else:
-                # Fallback if bubble image is missing => draw a rectangle
-                rect_width = 200
-                rect_height = 50
-
-                # Position the rect to the left
-                bubble_x = int(self.sprite_x) - rect_width - 20
-                bubble_y = int(self.sprite_y)
-                if bubble_x < 0:
-                    bubble_x = 0
-
-                self.dialog_rect = QtCore.QRect(bubble_x, bubble_y,
-                                                rect_width, rect_height)
-
-                painter.save()
-                painter.setBrush(QtGui.QColor(255, 255, 255, 220))
-                painter.setPen(QtCore.Qt.black)
-                painter.drawRect(self.dialog_rect)
-                painter.restore()
-
-                painter.save()
-                text_margin = 8
-                text_rect = QtCore.QRect(
-                    bubble_x + text_margin,
-                    bubble_y + text_margin,
-                    rect_width - 2 * text_margin,
-                    rect_height - 2 * text_margin
+                self.bubble_pixmap = self.bubble_pixmap.scaled(
+                    bubble_width, bubble_height,
+                    QtCore.Qt.KeepAspectRatioByExpanding,
+                    QtCore.Qt.SmoothTransformation
                 )
-                painter.setPen(QtCore.Qt.black)
-                painter.drawText(text_rect,
-                                 QtCore.Qt.AlignLeft | QtCore.Qt.TextWordWrap,
-                                 self.dialog_text)
-                painter.restore()
-        else:
-            # No dialog => clear the stored rect
-            self.dialog_rect = QtCore.QRect()
+
+            # Position the bubble to the left of the sprite
+            bubble_x = int(self.sprite_x) - bubble_width - 20
+            bubble_y = int(self.sprite_y)
+
+            # Ensure the bubble stays within screen bounds
+            screen_geo = QtWidgets.QApplication.primaryScreen().availableGeometry()
+            if bubble_x < 0:
+                bubble_x = 0
+            if bubble_y + bubble_height > screen_geo.height():
+                bubble_y = screen_geo.height() - bubble_height
+
+            # Update dialog rect for the mask
+            self.dialog_rect = QtCore.QRect(bubble_x, bubble_y, bubble_width, bubble_height)
+
+            # Draw the bubble sprite
+            painter.save()
+            painter.drawPixmap(bubble_x, bubble_y, self.bubble_pixmap)
+            painter.restore()
+
+            # Draw the text inside the bubble
+            text_rect = QtCore.QRect(
+                bubble_x + text_margin,
+                bubble_y + text_margin,
+                text_bounding_rect.width(),
+                text_bounding_rect.height()
+            )
+            painter.save()
+            painter.setPen(QtCore.Qt.black)
+            painter.drawText(text_rect, QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap, self.dialog_text)
+            painter.restore()
+        #     else:
+        #         # Fallback if bubble image is missing => draw a rectangle
+        #         rect_width = 200
+        #         rect_height = 50
+
+        #         # Position the rect to the left
+        #         bubble_x = int(self.sprite_x) - rect_width - 20
+        #         bubble_y = int(self.sprite_y)
+        #         if bubble_x < 0:
+        #             bubble_x = 0
+
+        #         self.dialog_rect = QtCore.QRect(bubble_x, bubble_y,
+        #                                         rect_width, rect_height)
+
+        #         painter.save()
+        #         painter.setBrush(QtGui.QColor(255, 255, 255, 220))
+        #         painter.setPen(QtCore.Qt.black)
+        #         painter.drawRect(self.dialog_rect)
+        #         painter.restore()
+
+        #         painter.save()
+        #         text_margin = 8
+        #         text_rect = QtCore.QRect(
+        #             bubble_x + text_margin,
+        #             bubble_y + text_margin,
+        #             rect_width - 2 * text_margin,
+        #             rect_height - 2 * text_margin
+        #         )
+        #         painter.setPen(QtCore.Qt.black)
+        #         painter.drawText(text_rect,
+        #                          QtCore.Qt.AlignLeft | QtCore.Qt.TextWordWrap,
+        #                          self.dialog_text)
+        #         painter.restore()
+        # else:
+        #     # No dialog => clear the stored rect
+        #     self.dialog_rect = QtCore.QRect()
 
     ################################################################
     # Dialog logic
